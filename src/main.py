@@ -14,6 +14,21 @@ import asyncio
 import argparse
 
 from core.config import setup_api_key
+from agents.agent import create_unsafe_agent, create_protected_agent
+from attacks.attacks import (
+    run_attacks,
+    generate_ai_attacks,
+)
+from guardrails.input_guardrails import (
+    test_injection_detection,
+    test_topic_filter,
+    test_input_plugin,
+    InputGuardrailPlugin,
+)
+from guardrails.output_guardrails import test_content_filter, _init_judge, OutputGuardrailPlugin
+from guardrails.rate_limiter import RateLimitPlugin
+from guardrails.audit_log import AuditLogPlugin
+from testing.testing import run_comparison, print_comparison, SecurityTestPipeline
 
 
 async def part1_attacks():
@@ -22,22 +37,18 @@ async def part1_attacks():
     print("PART 1: Attack Unprotected Agent")
     print("=" * 60)
 
-    from agents.agent import create_unsafe_agent, test_agent
-    from attacks.attacks import run_attacks, generate_ai_attacks
+    unsafe_agent, unsafe_runner = create_unsafe_agent()
+    print("Unsafe agent created - NO guardrails!")
 
-    # Create and test the unsafe agent
-    agent, runner = create_unsafe_agent()
-    await test_agent(agent, runner)
-
-    # TODO 1: Run manual adversarial prompts
+    # Manual attacks
     print("\n--- Running manual attacks (TODO 1) ---")
-    results = await run_attacks(agent, runner)
+    await run_attacks(unsafe_agent, unsafe_runner)
 
-    # TODO 2: Generate AI attack test cases
+    # Generated AI attacks
     print("\n--- Generating AI attacks (TODO 2) ---")
     ai_attacks = await generate_ai_attacks()
-
-    return results
+    if ai_attacks:
+        await run_attacks(unsafe_agent, unsafe_runner, prompts=ai_attacks)
 
 
 async def part2_guardrails():
@@ -48,11 +59,6 @@ async def part2_guardrails():
 
     # Part 2A: Input guardrails
     print("\n--- Part 2A: Input Guardrails ---")
-    from guardrails.input_guardrails import (
-        test_injection_detection,
-        test_topic_filter,
-        test_input_plugin,
-    )
     test_injection_detection()
     print()
     test_topic_filter()
@@ -61,9 +67,17 @@ async def part2_guardrails():
 
     # Part 2B: Output guardrails
     print("\n--- Part 2B: Output Guardrails ---")
-    from guardrails.output_guardrails import test_content_filter, _init_judge
-    _init_judge()  # Initialize LLM judge if TODO 7 is done
+    _init_judge()  
     test_content_filter()
+    
+    # Part 2D (New): Rate Limiter & Audit Log
+    print("\n--- Part 2D: Rate Limiter & Audit Log ---")
+    print("Testing RateLimitPlugin...")
+    limit = RateLimitPlugin(max_requests=1, window_seconds=10)
+    passed = await limit.on_user_message_callback(invocation_context=None, user_message=None)
+    blocked = await limit.on_user_message_callback(invocation_context=None, user_message=None)
+    print(f"  [PASS] First request: {'Allowed' if not passed else 'Blocked'}")
+    print(f"  [PASS] Second request: {'Blocked' if blocked else 'Allowed'}")
 
     # Part 2C: NeMo Guardrails
     print("\n--- Part 2C: NeMo Guardrails ---")
@@ -72,9 +86,9 @@ async def part2_guardrails():
         init_nemo()
         await test_nemo_guardrails()
     except ImportError:
-        print("NeMo Guardrails not available. Skipping Part 2C.")
+        print("NeMo Guardrails not installed. Run: pip install nemoguardrails>=0.10.0")
     except Exception as e:
-        print(f"NeMo error: {e}. Skipping Part 2C.")
+        print(f"Skipping NeMo init — {e}")
 
 
 async def part3_testing():
@@ -83,26 +97,31 @@ async def part3_testing():
     print("PART 3: Security Testing Pipeline")
     print("=" * 60)
 
-    from testing.testing import run_comparison, print_comparison, SecurityTestPipeline
-    from agents.agent import create_unsafe_agent
-
     # TODO 10: Before vs after comparison
     print("\n--- TODO 10: Before/After Comparison ---")
     unprotected, protected = await run_comparison()
     if unprotected and protected:
         print_comparison(unprotected, protected)
     else:
-        print("Complete TODO 10 to see the comparison.")
+        print("Comparison failed or TODO not complete.")
 
     # TODO 11: Automated security pipeline
     print("\n--- TODO 11: Security Test Pipeline ---")
-    agent, runner = create_unsafe_agent()
+    _init_judge()
+    audit_log = AuditLogPlugin()
+    agent, runner = create_protected_agent(plugins=[
+        RateLimitPlugin(),
+        InputGuardrailPlugin(),
+        OutputGuardrailPlugin(),
+        audit_log
+    ])
     pipeline = SecurityTestPipeline(agent, runner)
     results = await pipeline.run_all()
     if results:
         pipeline.print_report(results)
+        audit_log.export_json("security_audit.json") 
     else:
-        print("Complete TODO 11 to see the pipeline report.")
+        print("Pipeline report failed.")
 
 
 def part4_hitl():
@@ -133,7 +152,11 @@ async def main(parts=None):
     if parts is None:
         parts = [1, 2, 3, 4]
 
-    for part in parts:
+    for i, part in enumerate(parts):
+        if i > 0:
+            print(f"\nPhase complete. Waiting 15s for API quota to reset...")
+            await asyncio.sleep(15)
+
         if part == 1:
             await part1_attacks()
         elif part == 2:

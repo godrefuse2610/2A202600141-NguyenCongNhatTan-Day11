@@ -84,13 +84,43 @@ class ConfidenceRouter:
         #      action="escalate", priority="high",
         #      requires_human=True, reason="Low confidence — escalating"
 
+        _ = response  # Response body is available for future rubric extension.
+        bounded_confidence = max(0.0, min(1.0, confidence))
+
+        if action_type in HIGH_RISK_ACTIONS:
+            return RoutingDecision(
+                action="escalate",
+                confidence=bounded_confidence,
+                reason=f"High-risk action: {action_type}",
+                priority="high",
+                requires_human=True,
+            )
+
+        if bounded_confidence >= self.HIGH_THRESHOLD:
+            return RoutingDecision(
+                action="auto_send",
+                confidence=bounded_confidence,
+                reason="High confidence",
+                priority="low",
+                requires_human=False,
+            )
+
+        if bounded_confidence >= self.MEDIUM_THRESHOLD:
+            return RoutingDecision(
+                action="queue_review",
+                confidence=bounded_confidence,
+                reason="Medium confidence — needs review",
+                priority="normal",
+                requires_human=True,
+            )
+
         return RoutingDecision(
-            action="auto_send",
-            confidence=confidence,
-            reason="TODO: implement routing logic",
-            priority="low",
-            requires_human=False,
-        )  # TODO: Replace with implementation
+            action="escalate",
+            confidence=bounded_confidence,
+            reason="Low confidence — escalating",
+            priority="high",
+            requires_human=True,
+        )
 
 
 # ============================================================
@@ -109,27 +139,27 @@ class ConfidenceRouter:
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "name": "High-value transaction approval",
+        "trigger": "Transfer amount exceeds 100,000,000 VND or destination account is new.",
+        "hitl_model": "human-in-the-loop",
+        "context_needed": "User KYC status, device fingerprint, transfer history, risk score, and destination metadata.",
+        "example": "Customer asks to transfer 250,000,000 VND to a first-time beneficiary at 2 AM.",
     },
     {
         "id": 2,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "name": "Potential account takeover signals",
+        "trigger": "Multiple failed authentications, unusual IP/geo, and sudden profile changes in one session.",
+        "hitl_model": "human-on-the-loop",
+        "context_needed": "Login timeline, MFA events, prior trusted devices, and anomaly detection explanation.",
+        "example": "User requests password reset and email change from a new country within 5 minutes.",
     },
     {
         "id": 3,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "name": "Policy conflict in support response",
+        "trigger": "Guardrails disagree (e.g., content filter passes but LLM judge marks unsafe or low confidence).",
+        "hitl_model": "human-as-tiebreaker",
+        "context_needed": "Original user prompt, drafted response, judge verdict, triggered guardrail rules, and policy excerpt.",
+        "example": "Agent drafts a fee-refund answer that sounds valid but includes unverifiable policy numbers.",
     },
 ]
 
